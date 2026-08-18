@@ -1,85 +1,128 @@
 import streamlit as st
 import joblib
-# Load trained models
-logistic_model = joblib.load('logistic_regression.pkl')
-decision_tree_model = joblib.load('decision_tree.pkl')
-knn_model = joblib.load('knn.pkl')
-naive_bayes_model = joblib.load('naive_bayes.pkl')
-random_forest_model = joblib.load('random_forest.pkl')
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, roc_auc_score, precision_score, recall_score, f1_score, matthews_corrcoef, confusion_matrix, classification_report
 
-# Load scaler and feature names
-scaler = joblib.load('scaler.pkl')
-feature_names = joblib.load('feature_names.pkl')
+# Load trained models and preprocessing objects
+logistic_model = joblib.load("logistic_regression.pkl")
+decision_tree_model = joblib.load("decision_tree.pkl")
+knn_model = joblib.load("knn.pkl")
+naive_bayes_model = joblib.load("naive_bayes.pkl")
+random_forest_model = joblib.load("random_forest.pkl")
+scaler = joblib.load("scaler.pkl")
+feature_names = joblib.load("feature_names.pkl")
 
-st.set_page_config(
-    page_title="Breast Cancer Classification",
-    page_icon="🩺",
-    layout="wide"
-)
+models = {
+    "Logistic Regression": logistic_model,
+    "Decision Tree": decision_tree_model,
+    "kNN": knn_model,
+    "Naive Bayes": naive_bayes_model,
+    "Random Forest": random_forest_model
+}
+scaled_models = {"Logistic Regression", "kNN", "Naive Bayes"}
 
+st.set_page_config(page_title="Breast Cancer Classification", page_icon="🩺", layout="wide")
 st.title("🩺 Breast Cancer Classification")
-st.write("Select a machine learning model and enter the required feature values to predict the diagnosis.")
+st.write("Upload the test dataset to evaluate the trained classification models.")
 
-model_name = st.selectbox(
-    "Select a Machine Learning Model",
-    [
-        "Logistic Regression",
-        "Decision Tree",
-        "kNN",
-        "Naive Bayes",
-        "Random Forest"
-    ]
-)
+st.subheader("1. Upload Test Data (CSV)")
+uploaded_file = st.file_uploader("Upload test_data.csv", type=["csv"])
 
-st.subheader("Enter Feature Values")
+st.subheader("2. Select a Machine Learning Model")
+model_name = st.selectbox("Model", list(models.keys()))
 
-input_values = []
+if uploaded_file is not None:
+    test_df = pd.read_csv(uploaded_file)
 
-columns = st.columns(3)
+    missing_features = [f for f in feature_names if f not in test_df.columns]
+    if missing_features:
+        st.error("Missing required feature columns: " + ", ".join(missing_features))
+        st.stop()
 
-for i, feature in enumerate(feature_names):
-    with columns[i % 3]:
-        value = st.number_input(
-            feature,
-            value=0.0
-        )
-        input_values.append(value)
+    if "diagnosis" not in test_df.columns:
+        st.error("The uploaded test data must contain the 'diagnosis' column.")
+        st.stop()
 
-st.subheader("Prediction")
+    X_test = test_df[feature_names].copy()
+    y_test = test_df["diagnosis"]
 
-if st.button("Predict Diagnosis"):
+    if y_test.dtype == object:
+        y_test = y_test.map({"B": 0, "M": 1})
 
-    # Convert input values into 2D format
-    input_data = [input_values]
+    y_test = pd.to_numeric(y_test, errors="coerce")
+    if y_test.isna().any():
+        st.error("The diagnosis column must contain B/M or 0/1 values.")
+        st.stop()
+    y_test = y_test.astype(int)
 
-    # Scale input for models that require scaling
-    input_scaled = scaler.transform(input_data)
+    st.subheader("3. Model Performance on Test Data")
+    results = []
+    predictions = {}
+    probabilities = {}
 
-    # Select the model
-    if model_name == "Logistic Regression":
-        prediction = logistic_model.predict(input_scaled)[0]
-        probability = logistic_model.predict_proba(input_scaled)[0][1]
+    for name, model in models.items():
+        X_used = scaler.transform(X_test) if name in scaled_models else X_test
+        y_pred = model.predict(X_used)
+        y_prob = model.predict_proba(X_used)[:, 1]
 
-    elif model_name == "Decision Tree":
-        prediction = decision_tree_model.predict(input_data)[0]
-        probability = decision_tree_model.predict_proba(input_data)[0][1]
+        predictions[name] = y_pred
+        probabilities[name] = y_prob
 
-    elif model_name == "kNN":
-        prediction = knn_model.predict(input_scaled)[0]
-        probability = knn_model.predict_proba(input_scaled)[0][1]
+        results.append({
+            "ML Model Name": name,
+            "Accuracy": accuracy_score(y_test, y_pred),
+            "AUC": roc_auc_score(y_test, y_prob),
+            "Precision": precision_score(y_test, y_pred, zero_division=0),
+            "Recall": recall_score(y_test, y_pred, zero_division=0),
+            "F1 Score": f1_score(y_test, y_pred, zero_division=0),
+            "MCC": matthews_corrcoef(y_test, y_pred)
+        })
 
-    elif model_name == "Naive Bayes":
-        prediction = naive_bayes_model.predict(input_scaled)[0]
-        probability = naive_bayes_model.predict_proba(input_scaled)[0][1]
+    results_df = pd.DataFrame(results)
+    st.dataframe(results_df.style.format({
+        "Accuracy": "{:.4f}", "AUC": "{:.4f}", "Precision": "{:.4f}",
+        "Recall": "{:.4f}", "F1 Score": "{:.4f}", "MCC": "{:.4f}"
+    }), use_container_width=True)
 
-    elif model_name == "Random Forest":
-        prediction = random_forest_model.predict(input_data)[0]
-        probability = random_forest_model.predict_proba(input_data)[0][1]
+    st.subheader(f"4. Detailed Evaluation - {model_name}")
+    selected_pred = predictions[model_name]
+    selected_prob = probabilities[model_name]
 
-    # Display result
-    if prediction == 0:
-        st.success("Diagnosis: Benign")
-    else:
-        st.error("Diagnosis: Malignant")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Accuracy", f"{accuracy_score(y_test, selected_pred):.2%}")
+    c2.metric("AUC", f"{roc_auc_score(y_test, selected_prob):.2%}")
+    c3.metric("Precision", f"{precision_score(y_test, selected_pred, zero_division=0):.2%}")
 
-    st.write(f"Probability of Malignant: {probability:.2%}")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Recall", f"{recall_score(y_test, selected_pred, zero_division=0):.2%}")
+    c5.metric("F1 Score", f"{f1_score(y_test, selected_pred, zero_division=0):.2%}")
+    c6.metric("MCC", f"{matthews_corrcoef(y_test, selected_pred):.4f}")
+
+    st.subheader("5. Confusion Matrix")
+    cm = confusion_matrix(y_test, selected_pred)
+    fig, ax = plt.subplots()
+    ax.imshow(cm)
+    ax.set_title(f"{model_name} - Confusion Matrix")
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(["Benign", "Malignant"])
+    ax.set_yticklabels(["Benign", "Malignant"])
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, cm[i, j], ha="center", va="center")
+    st.pyplot(fig)
+    plt.close(fig)
+
+    st.subheader("6. Classification Report")
+    report = classification_report(
+        y_test, selected_pred,
+        target_names=["Benign", "Malignant"],
+        output_dict=True, zero_division=0
+    )
+    st.dataframe(pd.DataFrame(report).transpose().style.format("{:.4f}"),
+                 use_container_width=True)
+else:
+    st.info("Please upload test_data.csv to view the model predictions, evaluation metrics, confusion matrix, and classification report.")
