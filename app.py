@@ -45,14 +45,22 @@ if uploaded_file is not None:
         st.stop()
 
     X_test = test_df[feature_names].copy()
-    y_test = test_df["diagnosis"]
 
-    if y_test.dtype == object:
-        y_test = y_test.map({"B": 0, "M": 1})
+    # Normalize diagnosis values so B/M and 0/1 formats are accepted.
+    y_raw = test_df["diagnosis"].astype(str).str.strip().str.upper()
+    diagnosis_map = {
+        "B": 0, "M": 1,
+        "0": 0, "1": 1,
+        "0.0": 0, "1.0": 1
+    }
+    y_test = y_raw.map(diagnosis_map)
 
-    y_test = pd.to_numeric(y_test, errors="coerce")
     if y_test.isna().any():
-        st.error("The diagnosis column must contain B/M or 0/1 values.")
+        invalid_values = sorted(y_raw[y_test.isna()].unique().tolist())
+        st.error(
+            "The diagnosis column must contain B/M or 0/1 values. "
+            f"Invalid value(s): {invalid_values}"
+        )
         st.stop()
     y_test = y_test.astype(int)
 
@@ -84,6 +92,20 @@ if uploaded_file is not None:
         "Accuracy": "{:.4f}", "AUC": "{:.4f}", "Precision": "{:.4f}",
         "Recall": "{:.4f}", "F1 Score": "{:.4f}", "MCC": "{:.4f}"
     }), use_container_width=True)
+
+    # Display predictions for the first 30 test patients.
+    st.subheader("3A. Predictions on First 30 Test Patients")
+    prediction_table = test_df[["id", "diagnosis"]].head(30).copy()
+    prediction_table["Actual Diagnosis"] = prediction_table["diagnosis"].map({
+        "B": "Benign", "M": "Malignant"
+    })
+    for name in models:
+        prediction_table[f"{name} Prediction"] = [
+            "Malignant" if p == 1 else "Benign"
+            for p in predictions[name][:30]
+        ]
+    prediction_table = prediction_table.drop(columns=["diagnosis"])
+    st.dataframe(prediction_table, use_container_width=True)
 
     st.subheader(f"4. Detailed Evaluation - {model_name}")
     selected_pred = predictions[model_name]
